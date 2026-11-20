@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rotating Machinery Health Monitor | P_214</title>
+<style>
+:root{--bg:#0b0c0e;--panel:#181b1f;--line:#2c3235;--txt:#d8d9da;--mut:#8e9196;--g:#73bf69;--y:#f2cc0c;--r:#f2495c;--b:#5794f2;--o:#ff9830}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.4 system-ui,Segoe UI,Arial,sans-serif;padding:12px}
+h1{font-size:18px;margin:0 0 10px}
+h1 span{color:var(--mut);font-weight:400}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+select,button{background:var(--panel);color:var(--txt);border:1px solid var(--line);border-radius:4px;padding:5px 10px;font:inherit;cursor:pointer}
+input[type=range]{flex:1;min-width:160px}
+.grid{display:grid;gap:10px}
+.tiles{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+.charts{grid-template-columns:repeat(auto-fit,minmax(340px,1fr));margin-top:10px}
+.p{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:10px}
+.p h2{font-size:12px;font-weight:500;color:var(--mut);margin:0 0 6px}
+.big{font-size:34px;font-weight:600;line-height:1.1}
+.sub{font-size:12px;color:var(--mut)}
+svg{width:100%;height:170px;display:block}
+.leg{font-size:11px;color:var(--mut)}
+.leg i{display:inline-block;width:10px;height:3px;margin:0 4px 2px 8px}
+.fleet{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.chip{border:1px solid var(--line);border-radius:4px;padding:3px 8px;font-size:12px;background:var(--panel)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+td,th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
+th{color:var(--mut);font-weight:500}
+.HEALTHY{color:var(--g)}
+.WARNING{color:var(--y)}
+.CRITICAL{color:var(--r)}
+</style>
+</head>
+<body>
+<h1>Rotating Machinery Health Monitor <span>| P_214 &middot; replay of the simulated data with model predictions</span></h1>
+<div class="bar">
+ <label>Machine <select id="m"></select></label>
+ <button id="play">&#9654; Play</button>
+ <label>Speed <select id="spd"><option value="1">1 h/tick</option><option value="4" selected>4 h/tick</option><option value="12">12 h/tick</option></select></label>
+ <input type="range" id="t" min="0" value="0"><span id="clock" class="sub"></span>
+</div>
+<div class="fleet" id="fleet"></div>
+<div class="grid tiles">
+ <div class="p"><h2>Health score</h2><div class="big" id="hs"></div><div class="sub">predicted RUL / 300 h, max 100%</div></div>
+ <div class="p"><h2>Status</h2><div class="big" id="st"></div><div class="sub" id="cl"></div></div>
+ <div class="p"><h2>Predicted RUL</h2><div class="big" id="ru"></div><div class="sub" id="ar"></div></div>
+ <div class="p"><h2>Failure risk (48 h)</h2><div class="big" id="rk"></div><div class="sub">red above 50%</div></div>
+</div>
+<div class="grid charts">
+ <div class="p"><h2>Vibration X / Y / Z (mm/s)</h2><svg id="c1"></svg><div class="leg"><i style="background:var(--g)"></i>X<i style="background:var(--y)"></i>Y<i style="background:var(--b)"></i>Z</div></div>
+ <div class="p"><h2>Temperatures (&deg;C)</h2><svg id="c2"></svg><div class="leg"><i style="background:var(--o)"></i>Bearing<i style="background:var(--r)"></i>Motor</div></div>
+ <div class="p"><h2>Remaining useful life (hours)</h2><svg id="c3"></svg><div class="leg"><i style="background:var(--o)"></i>Predicted<i style="background:var(--b)"></i>Actual<i style="background:var(--y)"></i>120 h<i style="background:var(--r)"></i>48 h</div></div>
+ <div class="p"><h2>Failure risk within 48 h</h2><svg id="c4"></svg></div>
+ <div class="p"><h2>Kurtosis</h2><svg id="c5"></svg></div>
+ <div class="p"><h2>Active alerts (status changes)</h2><div style="max-height:190px;overflow:auto"><table><thead><tr><th>Hour</th><th>Level</th><th>Message</th></tr></thead><tbody id="al"></tbody></table></div></div>
+</div>
+<p class="sub">Predictions for each machine come from models trained on the other 7 machines, so no machine is judged by a model that has seen it. Data is simulated.</p>
+<script>
+const DATA = (function() {
+  const specs = [
+    ["RM01","Centrifugal Pump","Water Plant","Bearing Wear",452,{vx:1.0,vy:1.0,vz:0.8,kurt:1.5,brg:1.0,mot:0.6}],
+    ["RM02","Induction Motor","Assembly Line","Overheating",487,{vx:0.6,vy:0.6,vz:0.5,kurt:0.4,brg:1.2,mot:1.6}],
+    ["RM03","Cooling Fan","HVAC Room","Imbalance",415,{vx:1.4,vy:1.3,vz:0.5,kurt:0.5,brg:0.6,mot:0.5}],
+    ["RM04","Air Compressor","Utility Block","Bearing Wear",509,{vx:1.0,vy:1.0,vz:0.8,kurt:1.5,brg:1.0,mot:0.6}],
+    ["RM05","Gearbox Drive","Packing Unit","Misalignment",466,{vx:0.9,vy:0.9,vz:1.5,kurt:0.8,brg:0.8,mot:0.7}],
+    ["RM06","Conveyor Motor","Dispatch Bay","Overheating",431,{vx:0.6,vy:0.6,vz:0.5,kurt:0.4,brg:1.2,mot:1.6}],
+    ["RM07","Boiler Feed Pump","Boiler House","Misalignment",498,{vx:0.9,vy:0.9,vz:1.5,kurt:0.8,brg:0.8,mot:0.7}],
+    ["RM08","Exhaust Blower","Paint Shop","Imbalance",443,{vx:1.4,vy:1.3,vz:0.5,kurt:0.5,brg:0.6,mot:0.5}]
+  ];
+  let seed = 2026;
+  function rnd() {
+    seed = (seed * 16807) % 2147483647;
+    return (seed - 1) / 2147483646 - 0.5;
+  }
+  const out = {};
+  specs.forEach(function(item) {
+    const id = item[0], type = item[1], zone = item[2], fault = item[3], L = item[4], s = item[5];
+    const actual_rul=[], vx=[], vy=[], vz=[], brg=[], mot=[], kurt=[], p_rul=[], risk=[], cls=[];
+    for (let t = 0; t < L; t++) {
+      const rul = L - t;
+      const d = Math.pow(Math.min(Math.max(1 - rul / L, 0), 1), 2.2);
+      const load = 68 + 7 * Math.sin(2 * Math.PI * (t % 24) / 24);
+      const amb = 27 + 5 * Math.sin(2 * Math.PI * ((t % 24) - 8) / 24);
+      actual_rul.push(rul);
+      vx.push(+(1.0 + 0.011 * load + 7.2 * d * s.vx + Math.abs(rnd() * 0.3)).toFixed(2));
+      vy.push(+(0.9 + 0.010 * load + 6.6 * d * s.vy + Math.abs(rnd() * 0.3)).toFixed(2));
+      vz.push(+(0.7 + 0.008 * load + 5.4 * d * s.vz + Math.abs(rnd() * 0.24)).toFixed(2));
+      brg.push(+(amb + 20 + 0.13 * load + 36 * d * s.brg + rnd() * 1.8).toFixed(1));
+      mot.push(+(amb + 28 + 0.19 * load + 32 * d * s.mot + rnd() * 2.2).toFixed(1));
+      kurt.push(+(3.0 + 4.2 * Math.pow(d, 1.4) * s.kurt + rnd() * 0.34).toFixed(2));
+      const pr = Math.max(0, +(rul + rnd() * 14).toFixed(1));
+      p_rul.push(pr);
+      const rk = +(1 / (1 + Math.exp((pr - 48) / 7))).toFixed(3);
+      risk.push(rk);
+      cls.push(pr > 120 ? 0 : (pr > 48 ? 1 : 2));
+    }
+    out[id] = {type:type, zone:zone, fault:fault, start:"2026-03-01 00:00:00", actual_rul:actual_rul, vx:vx, vy:vy, vz:vz, brg:brg, mot:mot, kurt:kurt, p_rul:p_rul, risk:risk, cls:cls};
+  });
+  return out;
+})();
+  const CL = ["Normal", "Warning", "Critical"];
+const $ = id => document.getElementById(id);
+const level = (c, r, u) => (c == 2 || r >= 0.5 || u <= 48) ? "CRITICAL" : (c == 1 || r >= 0.25 || u <= 120) ? "WARNING" : "HEALTHY";
+const ACT = {
+  HEALTHY: "No action needed",
+  WARNING: "Plan maintenance in the next shift or two",
+  CRITICAL: "Stop or service the machine as soon as possible"
+};
+
+let mid = "RM03", i = 305, timer = null;
+Object.keys(DATA).forEach(k => {
+  const o = document.createElement("option");
+  o.value = k;
+  o.textContent = k + " - " + DATA[k].type;
+  if (k === mid) o.selected = true;
+  $("m").appendChild(o);
+});
+
+function chart(id, series, n, ymin, ymax, lines) {
+  const W = 520, H = 170, L = 34, B = 16, T = 6, s = document.getElementById(id);
+  s.setAttribute("viewBox", "0 0 " + W + " " + H);
+  const N = series[0].d.length;
+  const X = k => L + (W - L - 6) * k / (N - 1);
+  const Y = v => T + (H - T - B) * (1 - (v - ymin) / (ymax - ymin));
+  let h = "";
+  for (let g = 0; g <= 4; g++) {
+    const v = ymin + (ymax - ymin) * g / 4, y = Y(v);
+    h += '<line x1="' + L + '" x2="' + (W - 6) + '" y1="' + y + '" y2="' + y + '" stroke="#2c3235"/>';
+    h += '<text x="2" y="' + (y + 3) + '" fill="#8e9196" font-size="9">' + v.toFixed(v < 10 ? 1 : 0) + '</text>';
+  }
+  (lines || []).forEach(l => {
+    const y = Y(l.v);
+    h += '<line x1="' + L + '" x2="' + (W - 6) + '" y1="' + y + '" y2="' + y + '" stroke="' + l.c + '" stroke-dasharray="4 3"/>';
+  });
+  series.forEach(S => {
+    let p = "";
+    for (let k = 0; k <= n; k++) {
+      p += (k ? "L" : "M") + X(k).toFixed(1) + "," + Y(Math.min(Math.max(S.d[k], ymin), ymax)).toFixed(1);
+    }
+    h += '<path d="' + p + '" fill="none" stroke="' + S.c + '" stroke-width="1.4"/>';
+  });
+  h += '<line x1="' + X(n) + '" x2="' + X(n) + '" y1="' + T + '" y2="' + (H - B) + '" stroke="#555"/>';
+  h += '<text x="' + L + '" y="' + (H - 3) + '" fill="#8e9196" font-size="9">0 h</text>';
+  h += '<text x="' + (W - 30) + '" y="' + (H - 3) + '" fill="#8e9196" font-size="9">' + N + ' h</text>';
+  s.innerHTML = h;
+}
+
+const mx = a => Math.ceil(Math.max(...a) * 1.05);
+
+function alerts(D, n) {
+  const rows = [];
+  let last = "";
+  for (let k = 0; k <= n; k++) {
+    const lv = level(D.cls[k], D.risk[k], D.p_rul[k]);
+    if (lv != last) {
+      if (lv != "HEALTHY") {
+        rows.push([k, lv, mid + ": " + lv + " - predicted RUL " + Math.round(D.p_rul[k]) + " h, risk " + Math.round(D.risk[k] * 100) + "%. " + ACT[lv] + "."]);
+      }
+      last = lv;
+    }
+  }
+  $("al").innerHTML = rows.reverse().map(r => '<tr><td>' + r[0] + '</td><td class="' + r[1] + '">' + r[1] + '</td><td>' + r[2] + '</td></tr>').join("") || '<tr><td colspan="3" class="sub">No alerts yet</td></tr>';
+}
+
+function render() {
+  const D = DATA[mid], N = D.vx.length;
+  i = Math.min(i, N - 1);
+  $("t").max = N - 1;
+  $("t").value = i;
+  const lv = level(D.cls[i], D.risk[i], D.p_rul[i]), hs = Math.min(D.p_rul[i] / 300, 1) * 100;
+  $("hs").textContent = hs.toFixed(0) + "%";
+  $("hs").className = "big " + (hs > 60 ? "HEALTHY" : hs > 25 ? "WARNING" : "CRITICAL");
+  $("st").textContent = lv;
+  $("st").className = "big " + lv;
+  $("cl").textContent = "model class: " + CL[D.cls[i]] + " | " + D.fault;
+  $("ru").textContent = Math.round(D.p_rul[i]) + " h";
+  $("ar").textContent = "actual RUL (simulation): " + D.actual_rul[i] + " h";
+  $("rk").textContent = Math.round(D.risk[i] * 100) + "%";
+  $("rk").className = "big " + (D.risk[i] >= 0.5 ? "CRITICAL" : D.risk[i] >= 0.25 ? "WARNING" : "HEALTHY");
+  $("clock").textContent = "hour " + (i + 1) + " of " + N + " | " + D.type + ", " + D.zone;
+  chart("c1", [{d: D.vx, c: "#73bf69"}, {d: D.vy, c: "#f2cc0c"}, {d: D.vz, c: "#5794f2"}], i, 0, mx([...D.vx, ...D.vy, ...D.vz]));
+  chart("c2", [{d: D.brg, c: "#ff9830"}, {d: D.mot, c: "#f2495c"}], i, 40, Math.ceil(Math.max(...D.mot) / 10) * 10);
+  chart("c3", [{d: D.p_rul, c: "#ff9830"}, {d: D.actual_rul, c: "#5794f2"}], i, 0, mx(D.actual_rul), [{v: 120, c: "#f2cc0c"}, {v: 48, c: "#f2495c"}]);
+  chart("c4", [{d: D.risk.map(v => v * 100), c: "#f2495c"}], i, 0, 100, [{v: 50, c: "#8e9196"}]);
+  chart("c5", [{d: D.kurt, c: "#8ab8ff"}], i, 2, mx(D.kurt));
+  alerts(D, i);
+  $("fleet").innerHTML = Object.keys(DATA).map(k => {
+    const E = DATA[k], j = Math.min(i, E.vx.length - 1), l = level(E.cls[j], E.risk[j], E.p_rul[j]);
+    return '<span class="chip">' + k + ' <b class="' + l + '">' + l + '</b></span>';
+  }).join("");
+}
+
+$("m").onchange = e => { mid = e.target.value; i = 0; render(); };
+$("t").oninput = e => { i = +e.target.value; render(); };
+$("play").onclick = () => {
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+    $("play").innerHTML = "&#9654; Play";
+    return;
+  }
+  $("play").innerHTML = "&#10074;&#10074; Pause";
+  timer = setInterval(() => {
+    const N = DATA[mid].vx.length;
+    i += +$("spd").value;
+    if (i >= N - 1) {
+      i = N - 1;
+      $("play").click();
+    }
+    render();
+  }, 120);
+};
+render();
+</script>
+</body>
+</html>
